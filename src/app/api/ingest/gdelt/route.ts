@@ -60,6 +60,7 @@ export async function POST(): Promise<NextResponse> {
         title:        String(art.title ?? "Untitled").slice(0, 255),
         summary:      art.seendescription ? String(art.seendescription) : null,
         url:          art.url ? String(art.url) : null,
+        image_url:    art.socialimage ? String(art.socialimage).slice(0, 600) : null,
         author:       art.domain ? String(art.domain) : null,
         published_at: realPublishedAt,  // Real publish date from GDELT
         ingested_at:  fetchTimeIso,     // Pipeline ingestion time

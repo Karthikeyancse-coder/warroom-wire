@@ -17,7 +17,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
-    // ── Keyword Pre-filter ───────────────────────────────────────────────
     const textToCheck = `${title ?? ""} ${summary ?? ""} ${url ?? ""}`;
     if (!matchesCrisisKeywords(textToCheck)) {
       return NextResponse.json({ dropped: "keyword_filter" });
@@ -25,25 +24,23 @@ export async function POST(req: Request) {
 
     const nowIso = new Date().toISOString();
 
-    // ── Link Verification Pipeline ───────────────────────────────────────
     const rawUrl = url ?? extractUrlFromText(`${title ?? ""} ${summary ?? ""}`);
     let verifiedTitle   = title   ? String(title).slice(0, 255)   : "Bluesky Post";
     let verifiedSummary = summary ? String(summary).slice(0, 600) : null;
     let canonicalUrl    = rawUrl;
     let publishedAt     = published_at ? new Date(published_at).toISOString() : nowIso;
     let isVerified      = false;
+    let imageUrl: string | null = null;
 
     if (rawUrl) {
       const normalizedUrlStr = normalizeUrl(rawUrl);
       const urlHash = generateUrlHash(normalizedUrlStr);
       const contentHashForUrl = generateContentHash(verifiedTitle, verifiedSummary ?? "");
 
-      // ── Phase 1: URL-level dedup ─────────────────────────────────────
       if (isKnownDuplicate(urlHash, contentHashForUrl)) {
         return NextResponse.json({ dropped: "duplicate" });
       }
 
-      // ── Link Verification ────────────────────────────────────────────
       const verified = await verifyArticle(normalizedUrlStr);
       if (!verified) {
         return NextResponse.json({ dropped: "verification_failed" });
@@ -53,23 +50,26 @@ export async function POST(req: Request) {
       verifiedSummary = verified.cleanText.slice(0, 600);
       canonicalUrl    = verified.canonicalUrl;
       publishedAt     = verified.publishedAt ?? publishedAt;
+      imageUrl        = verified.imageUrl;
       isVerified      = true;
 
-      // ── Phase 2: Content-level dedup ─────────────────────────────────
       const contentHash = generateContentHash(verifiedTitle, verified.cleanText);
       if (isKnownDuplicate(urlHash, contentHash)) {
         return NextResponse.json({ dropped: "duplicate" });
       }
-
       markAsSeen(urlHash, contentHash);
     }
 
-    const article: Omit<Article, "id" | "created_at" | "source_id"> & { content_hash?: string; verified?: boolean } = {
+    const article: Omit<Article, "id" | "created_at" | "source_id"> & {
+      content_hash?: string;
+      verified?: boolean;
+    } = {
       source_type:  "bluesky",
       external_id,
       title:        verifiedTitle,
       summary:      verifiedSummary,
       url:          canonicalUrl ? String(canonicalUrl).slice(0, 500) : null,
+      image_url:    imageUrl,
       author:       author ? String(author).slice(0, 100) : "bsky:user",
       published_at: publishedAt,
       ingested_at:  nowIso,
@@ -94,10 +94,7 @@ export async function POST(req: Request) {
         .maybeSingle();
 
       if (!error && data?.id) articleId = data.id;
-      await supabase
-        .from("sources")
-        .update({ status: "ok", last_fetched_at: nowIso })
-        .eq("name", "bluesky");
+      await supabase.from("sources").update({ status: "ok", last_fetched_at: nowIso }).eq("name", "bluesky");
     } catch { /* supabase offline */ }
 
     return NextResponse.json({ success: true, article_id: articleId, verified: isVerified });

@@ -96,6 +96,7 @@ export async function POST(): Promise<NextResponse> {
           title:        title.slice(0, 255),
           summary:      desc || null,
           url:          link,
+          image_url:    null as string | null,
           author:       feed.name,
           published_at: realPublishedAt,  // Real article publish time
           ingested_at:  fetchTimeIso,     // Pipeline ingestion time

@@ -3,6 +3,7 @@
  * ---------------------------------------------------------------------------
  * High-speed article link validator for War-Room Wire ingestion pipeline.
  * Uses cheerio (zero-DOM) for HTML parsing — no JSDOM/Readability overhead.
+ * Now extracts image_url from OG/Twitter meta tags.
  * ---------------------------------------------------------------------------
  */
 
@@ -16,6 +17,7 @@ export interface VerifiedArticle {
   siteName: string;
   canonicalUrl: string;
   publishedAt: string | null;
+  imageUrl: string | null;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -26,14 +28,12 @@ const BROWSER_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
-/** Tracking query params to strip */
 const TRACKING_PARAMS = new Set([
   "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
   "fbclid", "gclid", "msclkid", "ref", "source", "campaign",
   "_ga", "mc_cid", "mc_eid",
 ]);
 
-/** Soft-error / paywall patterns found in page titles or body */
 const PAYWALL_PATTERNS = [
   /subscribe (to|now|today)/i,
   /sign in to (read|continue|access)/i,
@@ -45,7 +45,6 @@ const PAYWALL_PATTERNS = [
   /log in to read/i,
 ];
 
-/** Domains to always skip (paywalled / behind auth) */
 const BLOCKED_DOMAINS = new Set([
   "nytimes.com", "wsj.com", "ft.com", "bloomberg.com",
   "thetimes.co.uk", "economist.com",
@@ -55,31 +54,59 @@ const MIN_TEXT_LENGTH = 150;
 
 // ─── URL Utilities ────────────────────────────────────────────────────────────
 
-/** Extract the first `https://` URL from a block of text / post body. */
 export function extractUrlFromText(text: string): string | null {
   if (!text) return null;
   const match = text.match(/https:\/\/[^\s<>"')\]]+/);
   return match ? match[0] : null;
 }
 
-/** Strip UTM / tracking query params and trailing punctuation. */
 export function normalizeUrl(rawUrl: string): string {
   try {
-    // Remove trailing punctuation that sometimes leaks from post text
     const cleaned = rawUrl.replace(/[.,;!?)\]>]+$/, "");
     const url = new URL(cleaned);
-
     for (const key of [...url.searchParams.keys()]) {
       if (TRACKING_PARAMS.has(key) || key.startsWith("utm_")) {
         url.searchParams.delete(key);
       }
     }
-    // Normalize hash — remove unless it looks like a SPA route
     url.hash = "";
     return url.toString();
   } catch {
     return rawUrl;
   }
+}
+
+// ─── Image URL Extraction ─────────────────────────────────────────────────────
+
+function extractImageUrl(
+  $: ReturnType<typeof cheerio.load>,
+  baseUrl: string
+): string | null {
+  const candidates = [
+    $('meta[property="og:image:secure_url"]').attr("content"),
+    $('meta[property="og:image"]').attr("content"),
+    $('meta[name="twitter:image"]').attr("content"),
+    $('meta[name="twitter:image:src"]').attr("content"),
+    $('link[rel="image_src"]').attr("href"),
+  ];
+
+  for (const raw of candidates) {
+    if (!raw?.trim()) continue;
+    try {
+      // Resolve relative URLs to absolute using the page's base URL
+      const absolute = new URL(raw.trim(), baseUrl).toString();
+      // Basic sanity: must look like an image URL
+      if (/\.(jpg|jpeg|png|webp|gif|avif|svg)(\?.*)?$/i.test(absolute) ||
+          absolute.includes("/image") ||
+          absolute.includes("img") ||
+          absolute.startsWith("https://")) {
+        return absolute.slice(0, 600);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return null;
 }
 
 // ─── Paywall / Soft-error Detection ──────────────────────────────────────────
@@ -100,20 +127,15 @@ function isDomainBlocked(url: string): boolean {
 
 // ─── Main Verifier ────────────────────────────────────────────────────────────
 
-/**
- * Verifies a URL by fetching and parsing its HTML.
- * Returns a VerifiedArticle on success, null on any failure.
- */
 export async function verifyArticle(rawUrl: string): Promise<VerifiedArticle | null> {
   let normalizedUrl: string;
   try {
     normalizedUrl = normalizeUrl(rawUrl);
-    new URL(normalizedUrl); // validate structure
+    new URL(normalizedUrl);
   } catch {
     return null;
   }
 
-  // Fast domain block check (no network hit)
   if (isDomainBlocked(normalizedUrl)) return null;
 
   try {
@@ -137,10 +159,10 @@ export async function verifyArticle(rawUrl: string): Promise<VerifiedArticle | n
     const $ = cheerio.load(html);
 
     // ── Title ──────────────────────────────────────────────────────────────
-    const ogTitle   = $('meta[property="og:title"]').attr("content")?.trim();
-    const tagTitle  = $("title").first().text().trim();
-    const h1Title   = $("h1").first().text().trim();
-    const title     = ogTitle || h1Title || tagTitle || "";
+    const ogTitle  = $('meta[property="og:title"]').attr("content")?.trim();
+    const tagTitle = $("title").first().text().trim();
+    const h1Title  = $("h1").first().text().trim();
+    const title    = ogTitle || h1Title || tagTitle || "";
 
     if (!title) return null;
 
@@ -162,11 +184,12 @@ export async function verifyArticle(rawUrl: string): Promise<VerifiedArticle | n
       $('time[datetime]').first().attr("datetime")?.trim() ||
       null;
 
+    // ── Image URL ──────────────────────────────────────────────────────────
+    const imageUrl = extractImageUrl($, normalizedUrl);
+
     // ── Body Text Extraction ───────────────────────────────────────────────
-    // Remove noise elements
     $("script, style, nav, footer, header, aside, .ad, .advertisement, .paywall, [class*='subscribe'], [id*='subscribe'], noscript").remove();
 
-    // Try semantic containers first, fall back to paragraph collection
     let cleanText = "";
     const containers = ["article", "main", '[role="main"]', ".article-body", ".post-content", ".entry-content", ".story-body"];
 
@@ -178,7 +201,6 @@ export async function verifyArticle(rawUrl: string): Promise<VerifiedArticle | n
       }
     }
 
-    // Paragraph fallback
     if (cleanText.length < MIN_TEXT_LENGTH) {
       cleanText = $("p")
         .map((_, el) => $(el).text().trim())
@@ -193,14 +215,14 @@ export async function verifyArticle(rawUrl: string): Promise<VerifiedArticle | n
     if (isPaywalled(title, cleanText)) return null;
 
     return {
-      title: title.slice(0, 255),
-      cleanText: cleanText.slice(0, 2000),
+      title:        title.slice(0, 255),
+      cleanText:    cleanText.slice(0, 2000),
       siteName,
       canonicalUrl: canonical.slice(0, 500),
-      publishedAt: publishedAt ? new Date(publishedAt).toISOString() : null,
+      publishedAt:  publishedAt ? new Date(publishedAt).toISOString() : null,
+      imageUrl,
     };
   } catch {
-    // Timeout, DNS failure, network error — silently drop
     return null;
   }
 }

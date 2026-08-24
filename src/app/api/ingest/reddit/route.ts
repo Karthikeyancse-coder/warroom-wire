@@ -47,6 +47,7 @@ export async function POST(): Promise<NextResponse> {
             title:        String(post.title ?? "").slice(0, 255),
             summary:      post.selftext ? String(post.selftext).slice(0, 500) : null,
             url:          String(post.url),
+            image_url:    null,
             author:       post.author ? `u/${post.author}` : null,
             published_at: publishedAt,
             ingested_at:  fetchTimeIso,

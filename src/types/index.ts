@@ -28,9 +28,10 @@ export interface Article {
   title: string;
   summary: string | null;
   url: string | null;
+  image_url: string | null;        // Primary article thumbnail (OG/Twitter image)
   author: string | null;
-  published_at: string;       // Real publication timestamp from the source publisher
-  ingested_at: string;        // Timestamp when our pipeline fetched/ingested the item
+  published_at: string;            // Real publication timestamp from the source publisher
+  ingested_at: string;            // Timestamp when our pipeline fetched/ingested the item
   tier: ArticleTier;
   tags: string[];
   is_breaking: boolean;

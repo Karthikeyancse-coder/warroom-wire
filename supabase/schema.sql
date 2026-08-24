@@ -64,6 +64,7 @@ create table if not exists public.articles (
 alter table public.articles add column if not exists ingested_at    timestamptz not null default now();
 alter table public.articles add column if not exists content_hash   text unique;
 alter table public.articles add column if not exists verified       boolean not null default false;
+alter table public.articles add column if not exists image_url      text;
 
 -- Indexes for lightning fast feed queries
 create index if not exists articles_published_at_idx  on public.articles (published_at desc);

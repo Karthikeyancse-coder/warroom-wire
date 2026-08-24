@@ -92,6 +92,7 @@ export async function POST(req: Request) {
       title:        title.trim().slice(0, 255),
       summary:      summary?.trim() ?? null,
       url:          url?.trim() ?? null,
+      image_url:    null,
       author:       "War-Room Wire (Demo)",
       published_at: nowIso,
       ingested_at:  nowIso,

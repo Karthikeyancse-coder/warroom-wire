@@ -24,6 +24,7 @@ const SEED_ARTICLES: Omit<Article, "id" | "created_at" | "source_id">[] = [
     title: "Global Supply Chain Alert: Key Maritime Corridor Experiences Unprecedented Congestion",
     summary: "Critical shipping lanes report severe bottlenecks following emergency port maintenance and severe weather disruptions across major trade routes.",
     url: "https://news.ycombinator.com",
+    image_url: null,
     author: "War-Room Desk",
     published_at: new Date(nowMs - 3 * 60 * 1000).toISOString(),
     ingested_at: new Date(nowMs - 2 * 60 * 1000).toISOString(),
@@ -40,9 +41,10 @@ const SEED_ARTICLES: Omit<Article, "id" | "created_at" | "source_id">[] = [
     title: "International Renewable Energy Output Reaches Record High in Q3",
     summary: "Grid operators across Europe and Asia register highest sustained solar and wind generation levels to date, lowering fossil peak reliance.",
     url: "https://www.reuters.com",
+    image_url: null,
     author: "Reuters",
-    published_at: new Date(nowMs - 4 * 3600 * 1000).toISOString(), // 4 hours old
-    ingested_at: new Date(nowMs - 5 * 60 * 1000).toISOString(),    // ingested 5m ago
+    published_at: new Date(nowMs - 4 * 3600 * 1000).toISOString(),
+    ingested_at: new Date(nowMs - 5 * 60 * 1000).toISOString(),
     tier: "major",
     tags: ["energy", "climate", "economy"],
     is_breaking: false,
@@ -56,9 +58,10 @@ const SEED_ARTICLES: Omit<Article, "id" | "created_at" | "source_id">[] = [
     title: "Central Banks Signal Coordinated Liquidity Protocol Revisions",
     summary: "Financial authorities convene to review automated high-frequency liquidity backstops ahead of fiscal quarter transitions.",
     url: "https://www.bloomberg.com",
+    image_url: null,
     author: "bloomberg.com",
-    published_at: new Date(nowMs - 6 * 3600 * 1000).toISOString(), // 6 hours old
-    ingested_at: new Date(nowMs - 8 * 60 * 1000).toISOString(),    // ingested 8m ago
+    published_at: new Date(nowMs - 6 * 3600 * 1000).toISOString(),
+    ingested_at: new Date(nowMs - 8 * 60 * 1000).toISOString(),
     tier: "major",
     tags: ["markets", "banking", "finance"],
     is_breaking: false,
@@ -72,8 +75,9 @@ const SEED_ARTICLES: Omit<Article, "id" | "created_at" | "source_id">[] = [
     title: "Cybersecurity Researchers Uncover Novel Zero-Day Affecting Core Infrastructure Firmwares",
     summary: "Patches deployed rapidly after proof-of-concept demonstration by security teams at international conference.",
     url: "https://reddit.com/r/worldnews",
+    image_url: null,
     author: "u/NetSecWatch",
-    published_at: new Date(nowMs - 2 * 3600 * 1000).toISOString(), // 2 hours old
+    published_at: new Date(nowMs - 2 * 3600 * 1000).toISOString(),
     ingested_at: new Date(nowMs - 12 * 60 * 1000).toISOString(),
     tier: "standard",
     tags: ["security", "tech", "cyber"],
@@ -88,8 +92,9 @@ const SEED_ARTICLES: Omit<Article, "id" | "created_at" | "source_id">[] = [
     title: "Autonomous Logistics Fleet Completes First Cross-Border Heavy Haul Test",
     summary: "Electric freight transports travel over 1,200 km without human intervention under strict regulatory monitoring.",
     url: "https://techcrunch.com",
+    image_url: null,
     author: "TechCrunch",
-    published_at: new Date(nowMs - 8 * 3600 * 1000).toISOString(), // 8 hours old
+    published_at: new Date(nowMs - 8 * 3600 * 1000).toISOString(),
     ingested_at: new Date(nowMs - 15 * 60 * 1000).toISOString(),
     tier: "standard",
     tags: ["tech", "ai", "transport"],
