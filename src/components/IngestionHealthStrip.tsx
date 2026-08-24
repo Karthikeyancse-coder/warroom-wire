@@ -76,7 +76,9 @@ export default function IngestionHealthStrip({ statuses }: Props) {
                 <span className={clsx("font-semibold", statusColor(status))}>
                   {SOURCE_LABELS[src]}
                 </span>
-                <span className="text-gray-500 capitalize text-[11px]">({status})</span>
+                <span className="text-gray-400 capitalize text-[11px]">
+                  ({status === "ok" ? "Ok" : status === "degraded" ? "Degraded" : status === "unavailable" ? "Unavailable" : "Connecting..."})
+                </span>
               </div>
             )
           )}

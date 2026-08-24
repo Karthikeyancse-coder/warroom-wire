@@ -7,7 +7,7 @@ import type { IngestionResult, SourceStatus } from "@/types";
 // useIngestionPolling
 //
 // Drives GDELT / Reddit / RSS ingestion from the open browser tab.
-// Concurrency safe: atomic Postgres lock prevents duplicate work.
+// Only sends requests to internal relative endpoints (/api/ingest/*).
 // ---------------------------------------------------------------------------
 
 export interface IngestionStatuses {
@@ -30,7 +30,14 @@ const SOURCE_COLORS: Record<Source, string> = {
   rss:    "color: #10b981; font-weight: bold;",
 };
 
-async function callIngest(source: Source): Promise<IngestionResult | null> {
+interface DetailedIngestionResult extends IngestionResult {
+  successful_feeds?: number;
+  total_feeds?: number;
+  warning?: string;
+  count?: number;
+}
+
+async function callIngest(source: Source): Promise<{ status: SourceStatus; data?: DetailedIngestionResult }> {
   const timeStr = new Date().toLocaleTimeString();
   console.log(
     `%c[Ingestion] [${timeStr}] Triggering /api/ingest/${source} (interval: ${INTERVALS[source] / 1000}s)...`,
@@ -41,17 +48,40 @@ async function callIngest(source: Source): Promise<IngestionResult | null> {
     const res = await fetch(`/api/ingest/${source}`, { method: "POST" });
     if (!res.ok) {
       console.warn(`%c[Ingestion] [${timeStr}] /api/ingest/${source} returned HTTP ${res.status}`, "color: #ef4444;");
-      return null;
+      return { status: "degraded" };
     }
-    const data = (await res.json()) as IngestionResult;
+
+    const data = (await res.json()) as DetailedIngestionResult;
     console.log(
-      `%c[Ingestion] [${timeStr}] /api/ingest/${source} -> status: ${data.status}, inserted: ${data.inserted}, skipped: ${data.skipped}`,
+      `%c[Ingestion] [${timeStr}] /api/ingest/${source} -> status: ${data.status}, inserted: ${data.inserted ?? 0}`,
       SOURCE_COLORS[source]
     );
-    return data;
+
+    // Specific status logic per source requirements
+    if (source === "gdelt") {
+      // GDELT: Mark Ok when the internal API responds with HTTP 200 (even if items = 0)
+      return { status: "ok", data };
+    }
+
+    if (source === "rss") {
+      // RSS Feeds: Mark Ok if at least 50% of feeds succeed; mark Degraded only if all fail
+      if (typeof data.successful_feeds === "number" && typeof data.total_feeds === "number") {
+        if (data.successful_feeds >= Math.ceil(data.total_feeds * 0.5)) {
+          return { status: "ok", data };
+        } else if (data.successful_feeds > 0) {
+          return { status: "ok", data }; // Still ok if at least 1 feed succeeded
+        } else {
+          return { status: "degraded", data };
+        }
+      }
+      return { status: data.status === "ok" ? "ok" : "degraded", data };
+    }
+
+    // Default for reddit / other
+    return { status: data.status ?? "ok", data };
   } catch (err) {
-    console.error(`%c[Ingestion] [${timeStr}] /api/ingest/${source} failed:`, "color: #ef4444;", err);
-    return null;
+    console.error(`%c[Ingestion] [${timeStr}] /api/ingest/${source} fetch error:`, "color: #ef4444;", err);
+    return { status: "degraded" };
   }
 }
 
@@ -69,17 +99,17 @@ export function useIngestionPolling() {
     console.log("%c[Ingestion Polling] Initialized in browser layout.", "color: #38bdf8; font-weight: bold;");
 
     async function poll(source: Source) {
-      const result = await callIngest(source);
+      const { status } = await callIngest(source);
       setStatuses((prev) => ({
         ...prev,
-        [source]: result?.status ?? "unavailable",
+        [source]: status,
       }));
       // Schedule next recurring poll
       timers.current[source] = setTimeout(() => poll(source), INTERVALS[source]);
     }
 
     // Stagger initial calls on first page load
-    const offsets: Record<Source, number> = { gdelt: 1_000, reddit: 6_000, rss: 12_000 };
+    const offsets: Record<Source, number> = { gdelt: 500, reddit: 3_000, rss: 5_000 };
     (Object.keys(INTERVALS) as Source[]).forEach((src) => {
       timers.current[src] = setTimeout(() => poll(src), offsets[src]);
     });
