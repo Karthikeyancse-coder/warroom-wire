@@ -9,6 +9,7 @@ import type { Article } from "@/types";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
+  const arrivalTime = Date.now();
   try {
     const authHeader = req.headers.get("authorization") ?? "";
     const expectedSecret = process.env.NOSTR_INGEST_SECRET || "dev_secret_nostr";
@@ -29,7 +30,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ dropped: "keyword_filter" });
     }
 
-    const nowIso = new Date().toISOString();
+    const nowIso = new Date(arrivalTime).toISOString();
 
     const rawUrl = url ?? extractUrlFromText(`${title ?? ""} ${summary ?? ""}`);
     let verifiedTitle   = title   ? String(title).slice(0, 255)   : "Nostr Dispatched Intel Note";
@@ -67,6 +68,17 @@ export async function POST(req: Request) {
       markAsSeen(urlHash, contentHash);
     }
 
+    // ── Telemetry Calculations ──────────────────────────────────────────
+    const pubTimeMs = new Date(publishedAt).getTime();
+    const networkLatencyMs = Math.max(0, arrivalTime - (isNaN(pubTimeMs) ? arrivalTime : pubTimeMs));
+    const processingLatencyMs = Date.now() - arrivalTime;
+
+    const mergedMetadata = {
+      ...(metadata ?? {}),
+      network_latency_ms: networkLatencyMs,
+      processing_latency_ms: processingLatencyMs,
+    };
+
     const article: Omit<Article, "id" | "created_at" | "source_id"> & {
       content_hash?: string;
       verified?: boolean;
@@ -85,7 +97,7 @@ export async function POST(req: Request) {
       is_breaking:  false,
       is_manual:    false,
       score:        0,
-      metadata:     metadata ?? {},
+      metadata:     mergedMetadata,
       verified:     isVerified,
     };
 
@@ -104,7 +116,15 @@ export async function POST(req: Request) {
       await supabase.from("sources").update({ status: "ok", last_fetched_at: nowIso }).eq("name", "nostr");
     } catch { /* supabase offline */ }
 
-    return NextResponse.json({ success: true, article_id: articleId, verified: isVerified });
+    return NextResponse.json({
+      success: true,
+      article_id: articleId,
+      verified: isVerified,
+      telemetry: {
+        network_latency_ms: networkLatencyMs,
+        processing_latency_ms: processingLatencyMs,
+      },
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: msg }, { status: 500 });

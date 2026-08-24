@@ -5,12 +5,21 @@
  * Standalone Nostr firehose listener for War-Room Wire.
  * Connects to 4 public relays, filters by crisis keywords,
  * and forwards matched events to /api/ingest/nostr with structured logging.
+ * Auto-reconnects within 5s on dropped connections without crashing.
  * ---------------------------------------------------------------------------
  */
 
 const fs   = require("fs");
 const path = require("path");
 const { WebSocket } = require("ws");
+
+// ── Global resilience handlers ─────────────────────────────────────────────
+process.on("uncaughtException", (err) => {
+  console.error("[Nostr Worker] Uncaught exception (resumed):", err.message);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[Nostr Worker] Unhandled rejection (resumed):", reason);
+});
 
 // ── Built-in .env.local loader ─────────────────────────────────────────────
 function loadEnv() {
@@ -113,7 +122,8 @@ async function forwardNoteToApi(event, relayUrl) {
         console.log(`[DROPPED] Reason: ${data.dropped} | "${title.slice(0, 60)}"`);
       } else if (data.success) {
         const badge = data.verified ? "[VERIFIED]" : "[FORWARDED]";
-        console.log(`${badge} "${title.slice(0, 60)}" — ${pubkeyShort}`);
+        const tel = data.telemetry ? ` (proc: ${data.telemetry.processing_latency_ms}ms)` : "";
+        console.log(`${badge} "${title.slice(0, 60)}"${tel} — ${pubkeyShort}`);
       }
     }
   } catch {
@@ -121,9 +131,9 @@ async function forwardNoteToApi(event, relayUrl) {
   }
 }
 
-// ── Per-relay connection ───────────────────────────────────────────────────
+// ── Per-relay connection with max 5s auto-reconnect backoff ──────────────────
 function connectToRelay(relayUrl) {
-  let reconnectDelay = 5000;
+  let reconnectDelay = 2000;
   const subId        = `wrw_${Math.random().toString(36).slice(2, 8)}`;
 
   function connect() {
@@ -132,7 +142,7 @@ function connectToRelay(relayUrl) {
 
       ws.on("open", () => {
         console.log(`[Nostr Relay] ✅ Connected → ${relayUrl}`);
-        reconnectDelay = 5000;
+        reconnectDelay = 2000;
         ws.send(JSON.stringify(["REQ", subId, { kinds: [1], since: Math.floor(Date.now() / 1000) }]));
       });
 
@@ -145,14 +155,18 @@ function connectToRelay(relayUrl) {
         } catch {}
       });
 
-      ws.on("error", () => {});
+      ws.on("error", (err) => {
+        // Log cleanly without throwing
+        console.log(`[Nostr Relay] Notice (${relayUrl}): ${err.message || "Socket error"}`);
+      });
 
       ws.on("close", () => {
         setTimeout(connect, reconnectDelay);
-        reconnectDelay = Math.min(reconnectDelay * 1.5, 60000);
+        reconnectDelay = Math.min(reconnectDelay * 1.5, 5000); // Capped at 5s
       });
-    } catch {
+    } catch (err) {
       setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 1.5, 5000);
     }
   }
 

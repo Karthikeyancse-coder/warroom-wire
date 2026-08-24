@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ExternalLink, ShieldCheck, Wifi } from "lucide-react";
+import { Activity, ExternalLink, ShieldCheck, Wifi } from "lucide-react";
 import clsx from "clsx";
 import { sanitizePreview, extractDomain } from "@/lib/sanitize";
 import type { Article, ArticleTier, SourceType } from "@/types";
@@ -42,6 +42,16 @@ function relativeTime(isoDate: string): string {
   }
 }
 
+function formatTelemetry(metadata: Record<string, unknown> | undefined, verified?: boolean): string | null {
+  if (!metadata) return null;
+  const procMs = metadata.processing_latency_ms;
+  if (typeof procMs === "number") {
+    const sec = (procMs / 1000).toFixed(1);
+    return `Ingested in ${sec}s${verified ? " • Verified ✓" : ""}`;
+  }
+  return null;
+}
+
 // ─── Fallback Backdrop ────────────────────────────────────────────────────────
 
 function FallbackBackdrop({ sourceType }: { sourceType: SourceType }) {
@@ -71,6 +81,7 @@ function ArticleCard({ article }: CardProps) {
   const domain    = extractDomain(article.url, article.author ?? src.label);
   const preview   = sanitizePreview(article.summary, 180);
   const timestamp = relativeTime(article.published_at);
+  const telemetry = formatTelemetry(article.metadata, article.verified);
 
   return (
     <article
@@ -129,15 +140,15 @@ function ArticleCard({ article }: CardProps) {
           </span>
         </div>
 
-        {/* ── Top-right verified badge ──────────────────────────── */}
-        {article.verified && (
-          <div className="absolute top-2.5 right-2.5">
-            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-600/90 text-white shadow-md">
+        {/* ── Top-right badges ──────────────────────────────────── */}
+        <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5">
+          {article.verified && (
+            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-600/90 text-white shadow-md">
               <ShieldCheck className="w-3 h-3" />
               Verified
             </span>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* ── Body ───────────────────────────────────────────────────── */}
@@ -152,6 +163,14 @@ function ArticleCard({ article }: CardProps) {
           <p className="text-xs text-slate-400 line-clamp-3 leading-relaxed flex-1">
             {preview}
           </p>
+        )}
+
+        {/* ── Ingestion Telemetry Strip (if present) ─────────────── */}
+        {telemetry && (
+          <div className="flex items-center gap-1 text-[10px] font-mono text-emerald-400/90 font-medium pt-1">
+            <Activity className="w-3 h-3 text-emerald-400 shrink-0" />
+            <span>{telemetry}</span>
+          </div>
         )}
 
         {/* ── Footer ─────────────────────────────────────────────── */}

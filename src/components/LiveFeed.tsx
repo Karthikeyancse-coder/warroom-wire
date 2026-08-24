@@ -113,6 +113,11 @@ function LiveFeedItem({ article }: { article: LiveArticle }) {
       {/* Footer */}
       <div className="flex items-center justify-between text-[11px] text-gray-500 dark:text-gray-400 pt-1 border-t border-surface-border/50">
         <span className="truncate font-medium">{article.author ?? src.label}</span>
+        {typeof article.metadata?.processing_latency_ms === "number" && (
+          <span className="text-[10px] font-mono text-emerald-600 dark:text-emerald-400 font-medium">
+            Ingested in {((article.metadata.processing_latency_ms as number) / 1000).toFixed(1)}s{article.verified ? " • Verified ✓" : ""}
+          </span>
+        )}
       </div>
     </article>
   );

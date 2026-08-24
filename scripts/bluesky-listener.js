@@ -4,12 +4,21 @@
  * ---------------------------------------------------------------------------
  * Standalone Bluesky Jetstream firehose listener for War-Room Wire.
  * Filters crisis keywords, logs structured output, forwards to API.
+ * Auto-reconnects within 5s on dropped connections without crashing.
  * ---------------------------------------------------------------------------
  */
 
 const fs   = require("fs");
 const path = require("path");
 const { WebSocket } = require("ws");
+
+// ── Global resilience handlers ─────────────────────────────────────────────
+process.on("uncaughtException", (err) => {
+  console.error("[Bluesky Worker] Uncaught exception (resumed):", err.message);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[Bluesky Worker] Unhandled rejection (resumed):", reason);
+});
 
 // ── Built-in .env.local loader ─────────────────────────────────────────────
 function loadEnv() {
@@ -59,76 +68,82 @@ function matchesKeywords(text) {
 }
 
 function connect() {
-  const ws = new WebSocket(JETSTREAM_URL);
+  try {
+    const ws = new WebSocket(JETSTREAM_URL, { handshakeTimeout: 8000 });
 
-  ws.on("open", () => {
-    console.log("[Bluesky Worker] ✅ Connected to Jetstream firehose");
-    reconnectDelay = 2000;
-  });
+    ws.on("open", () => {
+      console.log("[Bluesky Worker] ✅ Connected to Jetstream firehose");
+      reconnectDelay = 2000;
+    });
 
-  ws.on("message", async (data) => {
-    try {
-      const event = JSON.parse(data.toString());
-      if (event.kind !== "commit") return;
-      if (event.commit?.collection !== "app.bsky.feed.post") return;
+    ws.on("message", async (data) => {
+      try {
+        const event = JSON.parse(data.toString());
+        if (event.kind !== "commit") return;
+        if (event.commit?.collection !== "app.bsky.feed.post") return;
 
-      const record = event.commit?.record;
-      if (!record?.text) return;
+        const record = event.commit?.record;
+        if (!record?.text) return;
 
-      const text = String(record.text).trim();
-      if (!matchesKeywords(text)) return;
+        const text = String(record.text).trim();
+        if (!matchesKeywords(text)) return;
 
-      const did      = event.did ?? "unknown";
-      const rkey     = event.commit?.rkey ?? Date.now();
-      const uri      = `at://${did}/app.bsky.feed.post/${rkey}`;
-      const postUrl  = `https://bsky.app/profile/${did}/post/${rkey}`;
-      const title    = text.length > 80 ? text.slice(0, 80) + "…" : text;
+        const did      = event.did ?? "unknown";
+        const rkey     = event.commit?.rkey ?? Date.now();
+        const uri      = `at://${did}/app.bsky.feed.post/${rkey}`;
+        const postUrl  = `https://bsky.app/profile/${did}/post/${rkey}`;
+        const title    = text.length > 80 ? text.slice(0, 80) + "…" : text;
 
-      // Detect embedded URL in post body
-      const urlMatch    = text.match(URL_REGEX);
-      const detectedUrl = urlMatch ? urlMatch[0] : postUrl;
+        // Detect embedded URL in post body
+        const urlMatch    = text.match(URL_REGEX);
+        const detectedUrl = urlMatch ? urlMatch[0] : postUrl;
 
-      if (urlMatch) {
-        console.log(`[LINK DETECTED] ${detectedUrl}`);
-      }
-
-      const payload = {
-        external_id:  uri,
-        title,
-        summary:      text.slice(0, 500),
-        url:          detectedUrl,
-        author:       did.length > 24 ? `did:…${did.slice(-8)}` : did,
-        published_at: record.createdAt ? new Date(record.createdAt).toISOString() : new Date().toISOString(),
-        metadata:     { did, rkey },
-      };
-
-      const res = await fetch(`${API_BASE_URL}/api/ingest/bluesky`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify(payload),
-      });
-
-      if (res.ok) {
-        const result = await res.json();
-        if (result.dropped) {
-          console.log(`[DROPPED] Reason: ${result.dropped} | "${title.slice(0, 60)}"`);
-        } else if (result.success) {
-          const badge = result.verified ? "[VERIFIED]" : "[FORWARDED]";
-          console.log(`${badge} "${title.slice(0, 60)}"`);
+        if (urlMatch) {
+          console.log(`[LINK DETECTED] ${detectedUrl}`);
         }
-      }
-    } catch {}
-  });
 
-  ws.on("error", (err) => {
-    console.error("[Bluesky Worker] Error:", err.message);
-  });
+        const payload = {
+          external_id:  uri,
+          title,
+          summary:      text.slice(0, 500),
+          url:          detectedUrl,
+          author:       did.length > 24 ? `did:…${did.slice(-8)}` : did,
+          published_at: record.createdAt ? new Date(record.createdAt).toISOString() : new Date().toISOString(),
+          metadata:     { did, rkey },
+        };
 
-  ws.on("close", () => {
-    console.log(`[Bluesky Worker] Disconnected. Reconnecting in ${reconnectDelay / 1000}s…`);
+        const res = await fetch(`${API_BASE_URL}/api/ingest/bluesky`, {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body:    JSON.stringify(payload),
+        });
+
+        if (res.ok) {
+          const result = await res.json();
+          if (result.dropped) {
+            console.log(`[DROPPED] Reason: ${result.dropped} | "${title.slice(0, 60)}"`);
+          } else if (result.success) {
+            const badge = result.verified ? "[VERIFIED]" : "[FORWARDED]";
+            const tel = result.telemetry ? ` (proc: ${result.telemetry.processing_latency_ms}ms)` : "";
+            console.log(`${badge} "${title.slice(0, 60)}"${tel}`);
+          }
+        }
+      } catch {}
+    });
+
+    ws.on("error", (err) => {
+      console.log(`[Bluesky Worker] Notice: ${err.message || "Socket error"}`);
+    });
+
+    ws.on("close", () => {
+      console.log(`[Bluesky Worker] Disconnected. Reconnecting in ${reconnectDelay / 1000}s…`);
+      setTimeout(connect, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 1.5, 5000); // Capped at 5s
+    });
+  } catch (err) {
     setTimeout(connect, reconnectDelay);
-    reconnectDelay = Math.min(reconnectDelay * 2, 60000);
-  });
+    reconnectDelay = Math.min(reconnectDelay * 1.5, 5000);
+  }
 }
 
 connect();
