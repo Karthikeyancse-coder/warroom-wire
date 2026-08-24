@@ -1,0 +1,89 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap");
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-inter: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+  
+  /* Dark mode default */
+  --surface: #0a0e14;
+  --surface-subtle: #111722;
+  --surface-muted: #1a2230;
+  --surface-border: #263345;
+  --app-bg: #0a0e14;
+  --text-main: #f1f5f9;
+  --text-muted: #94a3b8;
+  --card-bg: rgba(17, 23, 34, 0.85);
+  --card-border: rgba(38, 51, 69, 0.8);
+}
+
+.light {
+  --surface: #f8fafc;
+  --surface-subtle: #ffffff;
+  --surface-muted: #f1f5f9;
+  --surface-border: #e2e8f0;
+  --app-bg: #f8fafc;
+  --text-main: #0f172a;
+  --text-muted: #64748b;
+  --card-bg: rgba(255, 255, 255, 0.9);
+  --card-border: rgba(226, 232, 240, 0.9);
+}
+
+* { box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--app-bg);
+  color: var(--text-main);
+  font-family: var(--font-inter);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--surface-subtle); }
+::-webkit-scrollbar-thumb { background: var(--surface-border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #3b82f6; }
+
+/* Ticker animation */
+@keyframes ticker {
+  0%   { transform: translateX(100%); }
+  100% { transform: translateX(-100%); }
+}
+.ticker-inner { animation: ticker 40s linear infinite; }
+.ticker-inner:hover { animation-play-state: paused; }
+
+/* Glass card */
+.glass {
+  background: var(--card-bg);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--card-border);
+}
+
+/* Pulse dot */
+.live-dot {
+  @apply inline-block w-2.5 h-2.5 rounded-full bg-red-500;
+  animation: livePulse 1.4s ease-in-out infinite;
+}
+@keyframes livePulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.35; transform: scale(0.75); }
+}
+
+/* Feed card hover */
+.feed-card {
+  @apply glass rounded-xl p-4 transition-all duration-200 cursor-pointer;
+}
+.feed-card:hover {
+  border-color: rgba(56, 189, 248, 0.6);
+  box-shadow: 0 4px 20px -2px rgba(14, 165, 233, 0.15);
+  transform: translateY(-1px);
+}
