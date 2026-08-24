@@ -1,228 +1,356 @@
 # 🛰️ War-Room Wire
 
 > **High-Accuracy, Low-Latency Real-Time Intelligence & Crisis News Aggregation Engine**  
-> *Built for high-stakes situational awareness, crisis monitoring, and live intelligence desks.*
+> *Built for high-stakes situational awareness, crisis monitoring, and live intelligence command desks.*
+
+[![Next.js 14](https://img.shields.io/badge/Next.js-14.2.5-black?style=flat-square&logo=next.js)](https://nextjs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue?style=flat-square&logo=typescript)](https://www.typescriptlang.org/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind-3.4-38bdf8?style=flat-square&logo=tailwind-css)](https://tailwindcss.com/)
+[![Supabase](https://img.shields.io/badge/Supabase-PostgreSQL%20%26%20Realtime-3ecf8e?style=flat-square&logo=supabase)](https://supabase.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 
 ---
 
-## ⚡ Overview
+## 📑 Table of Contents
 
-**War-Room Wire** is a full-stack real-time intelligence dashboard and ingestion engine. It aggregates breaking news, decentralized social firehoses, government/geopolitical databases, and global RSS feeds into a single unified stream powered by **Supabase PostgreSQL & Realtime** and Next.js 14.
-
-### 🌟 Core Capabilities
-
-* 🌐 **Multi-Stream Firehose Intake**: Ingests continuously from **Nostr Relays**, **Bluesky Jetstream**, **GDELT 2.0 Doc API**, **Reddit WorldNews**, and **7 Global RSS Feeds** (BBC, Reuters, AP, TechCrunch, Hacker News, The Guardian, Al Jazeera).
-* 🛡️ **Sub-Second Link & Content Verifier**: Parses target articles server-side using **`cheerio`** within 3.5 seconds to extract primary headlines, canonical URLs, article bodies, and thumbnail media (`og:image`, `twitter:image`). Automatically drops 404s, paywalls, and spam.
-* 🔒 **Deterministic Deduplication**: Computes SHA-256 hashes of normalized titles and initial text payloads. Employs a dual-tier dedup model: an in-memory 2-hour rolling LRU cache (5,000 items) + atomic database deduplication (`ON CONFLICT (content_hash) DO NOTHING`).
-* ⚡ **Sub-2s Live Push Feed**: Connects frontend clients via Supabase Realtime WebSocket channels (`articles-realtime-feed`) for instant visual insertion with entrance animations.
-* ⏱️ **Ingest Latency Telemetry**: Instruments both **Network Latency** (publisher to server arrival) and **Processing Latency** (verification, dedup, triage) displayed directly on crisis cards (`Ingested in 1.4s • Verified ✓`).
-* 📰 **High-Density 3-Column Crisis Grid**: Modern responsive card grid (`grid-cols-1 md:grid-cols-2 xl:grid-cols-3`) with 180px thumbnail media headers, dark gradient stream backdrops, risk tier badges (Critical, High, Medium, Minor), and text sanitization.
-* 🧹 **Noise Sanitizer**: Cleans raw article excerpts by stripping HTML tags, entity codes, audio strings ("Listen 3 mins"), and social syndication noise ("Share on Twitter").
-* 🚨 **"Post Breaking Intel" Modal**: Immediate sub-second manual breaking news injection tool for live command room testing.
-
----
-
-## 📐 Architecture & Pipeline
-
-```
-┌───────────────────────────────────────────────────────────────────────────┐
-│                           FIREHOSE PRODUCERS                              │
-│                                                                           │
-│  [ Nostr 4x Relays WS ]     [ Bluesky Jetstream WS ]     [ "Post Breaking │
-│    (Background Worker)         (Background Worker)         Intel" Modal ] │
-│             │                           │                         │       │
-│             └─────────────┬─────────────┘                         │       │
-└───────────────────────────┼───────────────────────────────────────┼───────┘
-                            ▼                                       │
-┌───────────────────────────────────────────────────────────────────┼───────┐
-│                      INGESTION & TRIAGE API                       │       │
-│                                                                   │       │
-│   /api/ingest/nostr  ──┐                                          │       │
-│   /api/ingest/bluesky ─┼──> [ Keyword Pre-Filter (<5ms) ]         │       │
-│   /api/ingest/gdelt  ──┤                 │                        │       │
-│   /api/ingest/rss    ──┤                 ▼                        │       │
-│   /api/ingest/reddit ──┘    [ Link Verifier & Cheerio ]           │       │
-│                                (3.5s timeout, Paywall Drop,       │       │
-│                                 Image & Canonical Extract)        │       │
-│                                          │                        │       │
-│                                          ▼                        │       │
-│                             [ SHA-256 Deduplication ]             │       │
-│                               (LRU Cache + DB Conflict)           │       │
-│                                          │                        │       │
-│                                          ▼                        │       │
-│                             [ Telemetry Latency Calc ]            │       │
-└──────────────────────────────────────────┬────────────────────────┴───────┘
-                                           ▼
-┌───────────────────────────────────────────────────────────────────────────┐
-│                           PERSISTENCE & REALTIME                          │
-│                                                                           │
-│                    [ Supabase PostgreSQL + pg_trgm ]                      │
-│                                    │                                      │
-│                    [ Supabase Realtime Publication ]                      │
-└────────────────────────────────────┬──────────────────────────────────────┘
-                                     ▼
-┌───────────────────────────────────────────────────────────────────────────┐
-│                           PRESENTATION LAYER                              │
-│                                                                           │
-│   [ <LiveFeed /> ] ─────────> Instant WebSocket Prepend + Latency Pill    │
-│   [ <ArticleCardGrid /> ] ──> 3-Column Crisis Grid with 180px Thumbnails  │
-│   [ <BreakingNewsBanner /> ]> High-Priority Ticker                        │
-│   [ <IngestionHealthStrip />] Real-time Status of All Ingestion Routes    │
-└───────────────────────────────────────────────────────────────────────────┘
-```
+1. [Project Overview & Purpose](#-project-overview--purpose)
+2. [Complete Technology Stack & Rationale](#-complete-technology-stack--rationale)
+3. [All External APIs & Firehoses Used](#-all-external-apis--firehoses-used)
+4. [Core Architectural Pipeline](#-core-architectural-pipeline)
+5. [In-Depth Feature Implementations](#-in-depth-feature-implementations)
+   - [1. Link Verification & Thumbnail Extraction Engine](#1-link-verification--thumbnail-extraction-engine)
+   - [2. Dual-Phase Deterministic Deduplication](#2-dual-phase-deterministic-deduplication)
+   - [3. Live Telemetry & Ingest Latency Instrumentation](#3-live-telemetry--ingest-latency-instrumentation)
+   - [4. High-Density 3-Column Crisis Grid UI](#4-high-density-3-column-crisis-grid-ui)
+   - [5. Text Sanitization & Noise Stripper](#5-text-sanitization--noise-stripper)
+   - [6. Atomic Concurrency Lock for Feed Polling](#6-atomic-concurrency-lock-for-feed-polling)
+6. [Database Schema & PostgreSQL Setup](#-database-schema--postgresql-setup)
+7. [Repository Structure](#-repository-structure)
+8. [API Endpoints Reference](#-api-endpoints-reference)
+9. [Step-by-Step Local Setup & Execution Guide](#-step-by-step-local-setup--execution-guide)
+10. [Production Deployment Architecture](#-production-deployment-architecture)
 
 ---
 
-## 📊 Data Sources & Ingestion Modes
+## 🎯 Project Overview & Purpose
 
-| Source | Method | Polling / Stream | Role & Quality Filter |
+In emergency situations, geopolitical crises, cyber incidents, and disaster events, information travels across different mediums at vastly different speeds:
+- **Decentralized social networks** (Nostr relays, Bluesky Jetstream) report events within **seconds**.
+- **Mainstream news syndication** (Reuters, BBC, AP) provides high-accuracy verified articles within **minutes to hours**.
+- **Global event databases** (GDELT 2.0) categorize geopolitical conflicts across hundreds of countries.
+
+**War-Room Wire** bridges these disparate channels into a single unified dashboard. It provides:
+1. **Sub-second firehose streaming** without overwhelming users with spam or dead links.
+2. **Automated headless verification** using `cheerio` to validate page existence, extract thumbnails, and discard paywalls in under 3.5 seconds.
+3. **Cross-feed deduplication** so the same breaking story published across multiple wires is not repeated.
+4. **Transparent latency metrics** differentiating between original publisher publication times (`published_at`) and pipeline detection times (`ingested_at`).
+
+---
+
+## 🛠️ Complete Technology Stack & Rationale
+
+| Category | Technology | Version | Why We Chose It |
 |---|---|---|---|
-| **Nostr** | Standalone Node.js WS Worker | Real-time Stream (`since: now`) | Decentralized crisis reports across 4 relays (`damus.io`, `nos.lol`, `snort.social`, `nostr.mom`) |
-| **Bluesky** | Standalone Node.js WS Worker | Jetstream Firehose | AT Protocol commit stream filtered by 20+ crisis keywords |
-| **GDELT 2.0** | Server-side Ingest Route | 90-second In-browser Poller | Global geopolitical conflict and emergency event monitoring |
-| **RSS Feeds** | `Promise.allSettled` Route | 60-second In-browser Poller | 7 top-tier news wires (BBC, Reuters, AP, TechCrunch, HN, Guardian, Al Jazeera) |
-| **Reddit** | Server-side Ingest Route | 45-second In-browser Poller | r/worldnews and security communities |
-| **Manual Desk** | HTTP POST API Modal | On-Demand (Sub-2s) | Manual injection of breaking command intel |
+| **Framework** | Next.js (App Router) | `14.2.5` | Hybrid Server Components, zero-bundle API routes, and optimized server-side rendering. |
+| **Language** | TypeScript | `^5.0` | Strict type safety across ingestion schemas, article structures, and Supabase database definitions. |
+| **Styling** | Tailwind CSS | `^3.4.1` | Ultra-fast utility styling with custom glassmorphism design tokens (`backdrop-blur-md`, custom HSL colors). |
+| **Icons** | Lucide React | `^0.428.0` | Lightweight, scalable vector icons (`ShieldCheck`, `Activity`, `Wifi`, `Zap`, `ExternalLink`). |
+| **Database** | Supabase PostgreSQL | `pg15+` | Relational storage with JSONB metadata support, generated UUIDs, and full-text Trigram search (`pg_trgm`). |
+| **Realtime Sync** | `@supabase/supabase-js` | `^2.45.0` | Native WebSocket replication publication (`supabase_realtime`) for sub-second UI updates on `INSERT`. |
+| **HTML Parser** | `cheerio` | `^1.0.0` | Ultra-lightweight HTML parser (10x faster and 80% less memory than JSDOM/Readability) for sub-second link verification. |
+| **XML Parser** | `xml2js` | `^0.6.2` | Fast, resilient RSS and Atom feed parser with support for Dublin Core (`dc:date`) and multiple enclosure formats. |
+| **WebSocket Client** | `ws` | `^8.18.0` | High-throughput, zero-dependency Node.js WebSocket engine for continuous Nostr and Bluesky firehoses. |
+| **Cryptography** | Node.js `crypto` | Built-in | Deterministic SHA-256 hash generation for duplicate fingerprinting. |
 
 ---
 
-## 🛠️ Technology Stack
+## 🌐 All External APIs & Firehoses Used
 
-* **Framework**: Next.js 14 (App Router), React 18, TypeScript
-* **Styling**: Tailwind CSS, Lucide Icons, Glassmorphism UI tokens (`globals.css`)
-* **HTML Parsing & Extraction**: `cheerio`
-* **Database & Realtime**: Supabase PostgreSQL, Row-Level Security (RLS), Trigram Search (`pg_trgm`), `supabase_realtime` Publication
-* **Hashing & Encryption**: Node.js `crypto` (SHA-256)
-* **Firehose Clients**: `ws` (WebSocket) with auto-reconnect backoff
+### 1. Nostr Decentralized Relays (WebSocket)
+- **Protocols**: WebSocket (`wss://`) — NIP-01 Protocol
+- **Endpoints Connected**:
+  - `wss://relay.damus.io`
+  - `wss://nos.lol`
+  - `wss://relay.snort.social`
+  - `wss://nostr.mom`
+- **Subscription Filter**: `["REQ", "sub_id", { "kinds": [1], "since": <now_timestamp> }]`
+- **Purpose**: Captures raw, uncensored decentralized text notes in real-time as breaking events unfold globally.
+
+### 2. Bluesky Jetstream Firehose (WebSocket)
+- **Protocol**: WebSocket (`wss://`)
+- **Endpoint**: `wss://jetstream2.us-east.bsky.network/subscribe?wantedCollections=app.bsky.feed.post`
+- **Purpose**: Consumes the AT Protocol commit stream for newly published public posts matching critical crisis terms.
+
+### 3. GDELT 2.0 Doc API (REST)
+- **Protocol**: HTTP/HTTPS GET
+- **Endpoint**: `https://api.gdeltproject.org/api/v2/doc/doc?query=crisis%20OR%20audit%20OR%20sanctions&mode=artlist&maxrecords=20&format=json`
+- **Purpose**: Aggregates global news across hundreds of languages and countries with automated theme classification.
+- **Resilience**: Server-side 6-second timeout with graceful fallback to prevent upstream GDELT rate-limits from breaking the dashboard.
+
+### 4. Global RSS & Atom News Feeds (XML)
+- **Protocol**: HTTP/HTTPS GET with `Promise.allSettled`
+- **Feeds Integrated**:
+  1. **BBC World News**: `https://feeds.bbci.co.uk/news/world/rss.xml`
+  2. **Reuters Top News**: `https://feeds.reuters.com/reuters/topNews`
+  3. **Associated Press (AP Top News)**: `https://feeds.apnews.com/ApNewsAlerts`
+  4. **Hacker News (Frontpage)**: `https://hnrss.org/frontpage`
+  5. **TechCrunch**: `https://techcrunch.com/feed/`
+  6. **The Guardian World News**: `https://www.theguardian.com/world/rss`
+  7. **Al Jazeera English**: `https://www.aljazeera.com/xml/rss/all.xml`
+- **Purpose**: High-reputation journalism for verified confirmation of developing events.
+
+### 5. Reddit WorldNews API (JSON)
+- **Protocol**: HTTP/HTTPS GET
+- **Endpoint**: `https://www.reddit.com/r/worldnews/hot.json?limit=25`
+- **Purpose**: Community-curated breaking global events with upvote score thresholds.
 
 ---
 
-## 📁 Repository Structure
+## 📐 Core Architectural Pipeline
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           1. PRODUCERS & FIREHOSES                          │
+│                                                                             │
+│  [ Nostr 4x Relays ]    [ Bluesky Jetstream ]    [ In-Browser Poller ]      │
+│   (damus, nos.lol)      (jetstream2.us-east)     (GDELT, Reddit, 7x RSS)    │
+└──────────┬────────────────────────┬─────────────────────────┬───────────────┘
+           │                        │                         │
+           └────────────────────────┼─────────────────────────┘
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       2. INGESTION & TRIAGE CONTROLLER                      │
+│                                                                             │
+│  [ Pre-Filter ] ──────────> Crisis Dictionary Check (<5ms)                  │
+│                                   │                                         │
+│  [ Link Verifier ] ───────> Fetch Target URL (3.5s Timeout, Browser UA)     │
+│                             Cheerio HTML Extraction:                        │
+│                             • Title & Canonical URL                         │
+│                             • Article Thumbnail (OG / Twitter Image)        │
+│                             • Main Body Text (>150 chars, no paywall)       │
+│                                   │                                         │
+│  [ Deduplicator ] ────────> SHA-256 Fingerprint Hash                        │
+│                             • Phase 1: 2h Rolling In-Memory LRU Cache       │
+│                             • Phase 2: DB ON CONFLICT (content_hash)        │
+│                                   │                                         │
+│  [ Telemetry Tracker ] ───> Compute network_latency_ms & processing_latency │
+└───────────────────────────────────┬─────────────────────────────────────────┘
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      3. STORAGE & REALTIME REPLICATION                      │
+│                                                                             │
+│                     [ Supabase PostgreSQL Database ]                        │
+│                                   │                                         │
+│                     [ supabase_realtime Publication ]                       │
+└───────────────────────────────────┬─────────────────────────────────────────┘
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           4. PRESENTATION LAYER                             │
+│                                                                             │
+│  • <LiveFeed /> ──────────> WebSocket Subscription (Instant Prepend)        │
+│  • <ArticleCardGrid /> ───> 3-Column Crisis Grid with 180px Media Header    │
+│  • <BreakingNewsBanner /> > Critical Event Ticker                           │
+│  • <IngestionHealthStrip >> Real-Time Ingestion Route Status & Telemetry    │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 💡 In-Depth Feature Implementations
+
+### 1. Link Verification & Thumbnail Extraction Engine
+*Located in [`src/lib/verify-article.ts`](./src/lib/verify-article.ts)*
+- **Timeout Bound**: Uses `AbortSignal.timeout(3500)` to ensure no external link slows down the ingestion batch.
+- **Metadata Extraction**: Scrapes `meta[property="og:image"]`, `meta[name="twitter:image"]`, and `link[rel="image_src"]`, resolving relative paths into absolute URLs.
+- **Paywall & Spam Filter**: Evaluates content against soft-error patterns ("subscribe to read", "access denied", "sign in to continue") and drops articles with body text under 150 characters.
+
+### 2. Dual-Phase Deterministic Deduplication
+*Located in [`src/lib/dedupe.ts`](./src/lib/dedupe.ts)*
+- **Hash Computation**: `SHA-256( (title.trim() + cleanText.slice(0, 200).trim()).toLowerCase() )`.
+- **Phase 1 (In-Memory LRU)**: Sub-millisecond $O(1)$ memory check against a 5,000-item cache with a 2-hour TTL.
+- **Phase 2 (Database Level)**: Executes PostgreSQL upserts with `ON CONFLICT (content_hash) DO NOTHING` to guarantee deduplication across multiple serverless instances or background workers.
+
+### 3. Live Telemetry & Ingest Latency Instrumentation
+*Implemented in API routes and [`src/components/ArticleCardGrid.tsx`](./src/components/ArticleCardGrid.tsx)*
+- **`network_latency_ms`**: Time elapsed between publisher release (`published_at`) and our server intake.
+- **`processing_latency_ms`**: Time taken to fetch the link, parse HTML with Cheerio, evaluate duplicates, and commit to PostgreSQL.
+- **UI Indicator**: Displayed directly on article cards (`Ingested in 1.4s • Verified ✓`).
+
+### 4. High-Density 3-Column Crisis Grid UI
+*Located in [`src/components/ArticleCardGrid.tsx`](./src/components/ArticleCardGrid.tsx)*
+- **Media Header (~180px)**: Renders the scraped article image with hover zoom (`group-hover:scale-105`) or an abstract gradient fallback (`from-slate-900 via-slate-950 to-indigo-950/40`).
+- **Color-Coded Risk Badges**:
+  - `CRITICAL` (Red with pulsing indicator)
+  - `HIGH` (Amber)
+  - `MEDIUM` (Yellow)
+  - `MINOR` (Sky Blue)
+- **Verified Shield**: Prominent `ShieldCheck` green badge for articles validated by the verification engine.
+
+### 5. Text Sanitization & Noise Stripper
+*Located in [`src/lib/sanitize.ts`](./src/lib/sanitize.ts)*
+- Strips raw HTML and script tags.
+- Removes social syndication boilerplate ("Share on Twitter", "Listen to audio 3 mins", "Photo credit: AP").
+- Executes clean word-boundary truncation with ellipsis (`…`).
+
+### 6. Atomic Concurrency Lock for Feed Polling
+*Defined in [`supabase/schema.sql`](./supabase/schema.sql)*
+- PostgreSQL function `claim_source_lock(p_name, p_min_interval_seconds)` uses atomic `UPDATE ... WHERE ... RETURNING` to ensure multiple open browser tabs never duplicate ingest requests.
+
+---
+
+## 🗄️ Database Schema & PostgreSQL Setup
+
+The complete schema is located in [`supabase/schema.sql`](./supabase/schema.sql).
+
+### Key Columns on `articles` Table:
+* `id` (`UUID`): Primary key.
+* `source_type` (`TEXT`): `nostr` | `bluesky` | `gdelt` | `reddit` | `rss` | `manual`.
+* `external_id` (`TEXT UNIQUE`): Unique source identifier.
+* `content_hash` (`TEXT UNIQUE`): Deterministic SHA-256 hash for deduplication.
+* `verified` (`BOOLEAN DEFAULT FALSE`): Result of link verification.
+* `image_url` (`TEXT`): Primary thumbnail image URL.
+* `published_at` (`TIMESTAMPTZ`): Real article publication time from source.
+* `ingested_at` (`TIMESTAMPTZ`): Time when War-Room Wire ingested the item.
+* `tier` (`TEXT`): `breaking` | `major` | `standard` | `minor`.
+* `metadata` (`JSONB`): Stores telemetry metrics (`processing_latency_ms`, `network_latency_ms`, relay info).
+
+---
+
+## 📂 Repository Structure
 
 ```
 warroom-wire/
 ├── scripts/
-│   ├── nostr-listener.js       # Standalone Nostr firehose listener with auto-reconnect
-│   └── bluesky-listener.js     # Standalone Bluesky Jetstream listener with auto-reconnect
+│   ├── nostr-listener.js       # Nostr firehose worker (4 relays, 5s auto-reconnect)
+│   └── bluesky-listener.js     # Bluesky Jetstream firehose worker (5s auto-reconnect)
 ├── src/
 │   ├── app/
 │   │   ├── api/
-│   │   │   ├── articles/route.ts      # GET (paginated/filtered feed), POST (manual breaking news)
+│   │   │   ├── articles/route.ts      # Feed fetch & manual breaking news injection
 │   │   │   ├── ingest/
-│   │   │   │   ├── bluesky/route.ts   # Bluesky ingest + verify + dedup + telemetry
-│   │   │   │   ├── nostr/route.ts     # Nostr ingest + verify + dedup + telemetry
-│   │   │   │   ├── gdelt/route.ts     # GDELT 2.0 doc ingest with 6s timeout & fallback
-│   │   │   │   ├── rss/route.ts       # RSS Promise.allSettled 7-feed concurrent ingest
-│   │   │   │   └── reddit/route.ts    # Reddit worldnews ingest
-│   │   │   └── sources/route.ts       # Ingestion health and source registry
-│   │   ├── globals.css                # Glassmorphism tokens, ticker animations, dark/light vars
-│   │   ├── layout.tsx                 # Root layout with Inter font
-│   │   └── page.tsx                   # Main War-Room dashboard
+│   │   │   │   ├── bluesky/route.ts   # Bluesky ingest & verification pipeline
+│   │   │   │   ├── nostr/route.ts     # Nostr ingest & verification pipeline
+│   │   │   │   ├── gdelt/route.ts     # GDELT 2.0 ingest with 6s timeout & fallback
+│   │   │   │   ├── rss/route.ts       # 7-Feed Promise.allSettled RSS ingest
+│   │   │   │   └── reddit/route.ts    # Reddit r/worldnews ingest
+│   │   │   └── sources/route.ts       # Source registry & health telemetry
+│   │   ├── globals.css                # Glassmorphism tokens, ticker animations, themes
+│   │   ├── layout.tsx                 # Root layout
+│   │   └── page.tsx                   # Main 3-column crisis dashboard
 │   ├── components/
-│   │   ├── ArticleCardGrid.tsx        # High-density 3-column crisis card grid
-│   │   ├── LiveFeed.tsx               # Supabase Realtime live subscriber feed
-│   │   ├── BreakingNewsBanner.tsx     # Animated ticker for critical breaking news
+│   │   ├── ArticleCardGrid.tsx        # Responsive 3-column crisis card grid
+│   │   ├── LiveFeed.tsx               # Supabase Realtime live feed subscriber
+│   │   ├── BreakingNewsBanner.tsx     # High-priority breaking news ticker
 │   │   ├── FeedColumn.tsx             # Paginated feed wrapper
-│   │   ├── FilterBar.tsx              # Risk tier, source, and timespan filtering
-│   │   ├── IngestionHealthStrip.tsx   # Live telemetry status pill strip
-│   │   ├── PostArticleModal.tsx       # "Post Breaking Intel" modal dialog
+│   │   ├── FilterBar.tsx              # Tier, source, and timespan filtering
+│   │   ├── IngestionHealthStrip.tsx   # Ingestion status bar
+│   │   ├── PostArticleModal.tsx       # "Post Breaking Intel" modal
 │   │   ├── StatsPanel.tsx             # Real-time analytics breakdown
-│   │   └── TopNav.tsx                 # Sticky navigation with theme toggle & UTC clock
+│   │   └── TopNav.tsx                 # Glassmorphism header with theme toggle & UTC clock
 │   ├── hooks/
-│   │   ├── useIngestionPolling.ts     # Browser poller for RSS/GDELT/Reddit
-│   │   ├── useRealtimeFeed.ts         # Query & state management for feed
-│   │   └── useRelativeTime.ts         # Client-side dynamic relative timestamp updater
+│   │   ├── useIngestionPolling.ts     # Client-side staggered poller
+│   │   ├── useRealtimeFeed.ts         # Feed query & state management
+│   │   └── useRelativeTime.ts         # Dynamic relative timestamp updater
 │   ├── lib/
-│   │   ├── verify-article.ts          # Link validator, cheerio parser & thumbnail extractor
+│   │   ├── verify-article.ts          # Cheerio link validator & thumbnail scraper
 │   │   ├── dedupe.ts                  # SHA-256 hasher & 2-hour rolling LRU cache
-│   │   ├── sanitize.ts                # HTML tag & social noise sanitizer
-│   │   ├── keywords.ts                # Shared crisis & emergency dictionary
-│   │   ├── store.ts                   # In-memory fallback cache & seed data
+│   │   ├── sanitize.ts                # HTML tag & noise stripper
+│   │   ├── keywords.ts                # Crisis & emergency keyword dictionary
+│   │   ├── store.ts                   # In-memory store & seed data
 │   │   └── supabase/                  # Browser, server, and service-role clients
 │   └── types/
-│       └── index.ts                   # Unified Article, Source, and Telemetry types
+│       └── index.ts                   # Type definitions (Article, Source, Filters)
 └── supabase/
-    └── schema.sql                     # Complete idempotent PostgreSQL schema & RLS policies
+    └── schema.sql                     # Idempotent database schema & functions
 ```
 
 ---
 
-## 🚀 Getting Started
+## 📡 API Endpoints Reference
 
-### 1. Prerequisites
-* Node.js 18.x or 20.x
-* A free [Supabase](https://supabase.com) project
+### Ingestion Endpoints (Server-Side)
+* **`POST /api/ingest/nostr`**: Authenticated with `Bearer <NOSTR_INGEST_SECRET>`. Verifies link, hashes content, and upserts.
+* **`POST /api/ingest/bluesky`**: Ingests AT Protocol posts, extracts URLs, verifies content, and stores.
+* **`POST /api/ingest/rss`**: Concurrently fetches all 7 global RSS feeds with `Promise.allSettled` and 5s timeout.
+* **`POST /api/ingest/gdelt`**: Fetches GDELT 2.0 Doc API with 6s timeout and graceful fallback.
+* **`POST /api/ingest/reddit`**: Ingests top posts from r/worldnews.
 
-### 2. Clone and Install Dependencies
+### Feed Endpoints
+* **`GET /api/articles`**: Retrieves paginated articles with query parameters: `?search=`, `?tiers=`, `?sources=`, `?since=`.
+* **`POST /api/articles`**: Injects a manual breaking news item (sub-2-second demonstration).
 
+---
+
+## 🚀 Step-by-Step Local Setup & Execution Guide
+
+### 1. Clone & Install
 ```bash
 git clone https://github.com/Karthikeyancse-coder/warroom-wire.git
 cd warroom-wire
 npm install
 ```
 
-### 3. Configure Environment Variables
-
-Create `.env.local` in the root directory:
-
+### 2. Configure Environment (`.env.local`)
+Create `.env.local` in the project root:
 ```env
-# Supabase Configuration
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-supabase-anon-key
-SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
-
-# Internal Ingestion Authentication
+NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
 NOSTR_INGEST_SECRET=demo_nostr_secret_key
-
-# Application URL
 NEXT_PUBLIC_APP_URL=http://localhost:3000
 ```
 
-### 4. Setup Database Schema
+### 3. Initialize Database
+In your Supabase project dashboard → **SQL Editor** → **New Query**, paste and run [`supabase/schema.sql`](./supabase/schema.sql).
 
-Open your Supabase project dashboard → **SQL Editor** → **New Query**, copy the contents of [`supabase/schema.sql`](./supabase/schema.sql), and run it.
+### 4. Start the Application
 
-> **Note**: The schema is 100% idempotent and can be safely executed multiple times without dropping data or crashing on existing publication bindings.
+Open **three terminal windows** for the full real-time experience:
 
-### 5. Run the Application
-
-#### Terminal 1 — Next.js Web App:
 ```bash
+# Terminal 1: Next.js Web App
 npm run dev
-```
 
-#### Terminal 2 — Nostr Real-Time Firehose Worker:
-```bash
+# Terminal 2: Nostr Firehose Worker
 node scripts/nostr-listener.js
-```
 
-#### Terminal 3 — Bluesky Jetstream Firehose Worker:
-```bash
+# Terminal 3: Bluesky Jetstream Worker
 node scripts/bluesky-listener.js
 ```
 
-Visit [http://localhost:3000](http://localhost:3000) to view the live dashboard.
+Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ---
 
-## 🧪 Production Deployment
+## 🚢 Production Deployment Architecture
 
-### Frontend (Vercel)
-1. Push your repository to GitHub.
-2. Import project into Vercel.
-3. Add the environment variables from `.env.local`.
-4. Deploy!
+```
+                               ┌─────────────────────────────┐
+                               │       Vercel Platform       │
+                               │  • Next.js App Router       │
+                               │  • Serverless Ingest APIs   │
+                               │  • Static & Edge Assets     │
+                               └──────────────┬──────────────┘
+                                              │
+                     ┌────────────────────────┴────────────────────────┐
+                     ▼                                                 ▼
+        ┌─────────────────────────┐                       ┌─────────────────────────┐
+        │    Supabase Postgres    │                       │     Render / Railway    │
+        │ • articles table        │                       │  • nostr-listener.js    │
+        │ • sources table         │                       │  • bluesky-listener.js  │
+        │ • Realtime Publication  │                       │  (Persistent Workers)   │
+        └─────────────────────────┘                       └─────────────────────────┘
+```
 
-### Background Workers (Render / Railway)
-Because firehoses require persistent WebSockets, run the listeners as background workers:
-1. **Render**: Create **New + > Background Worker**.
-   - Build Command: `npm install`
-   - Start Command: `node scripts/nostr-listener.js` (or `node scripts/bluesky-listener.js`)
-   - Add `NEXT_PUBLIC_APP_URL` and `NOSTR_INGEST_SECRET`.
-2. **Railway**: Deploy as a service with start command `node scripts/nostr-listener.js`.
+1. **Web App & APIs (Vercel)**:
+   - Import the repository into Vercel.
+   - Configure environment variables from `.env.local`.
+2. **Background Workers (Render / Railway)**:
+   - Create a **Background Worker** service pointing to `scripts/nostr-listener.js` and `scripts/bluesky-listener.js`.
+   - Set `NEXT_PUBLIC_APP_URL` to your production Vercel URL.
 
 ---
 
-## 📜 License
+## 📄 License
 
-MIT License. Designed and engineered for live crisis awareness and hackathon presentations.
+MIT License — free for educational, research, and crisis-response use.
