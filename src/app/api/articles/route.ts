@@ -1,50 +1,40 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
 import { createServiceClient } from "@/lib/supabase/service";
-import { upsertArticle, queryArticles, countArticles } from "@/lib/store";
-import type { Article, ArticleTier, SourceType } from "@/types";
+import { queryArticles, countArticles, upsertArticle } from "@/lib/store";
+import type { ArticleTier, SourceType } from "@/types";
 
-// GET /api/articles
+export const dynamic = "force-dynamic";
+
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
-  const breaking = searchParams.get("breaking") === "true";
-  const stats    = searchParams.get("stats")    === "true";
-  const search   = searchParams.get("search")   ?? undefined;
-  const since    = searchParams.get("since")    ?? undefined;
-  const limit    = Math.min(Number(searchParams.get("limit")  ?? 30), 200);
-  const offset   = Number(searchParams.get("offset") ?? 0);
-  const tiers    = searchParams.get("tiers")?.split(",").filter(Boolean) as ArticleTier[] | undefined;
-  const sources  = searchParams.get("sources")?.split(",").filter(Boolean) as SourceType[] | undefined;
+  const breaking  = searchParams.get("breaking") === "true";
+  const search    = searchParams.get("search")   ?? undefined;
+  const since     = searchParams.get("since")    ?? undefined;
+  const tiers     = searchParams.get("tiers")?.split(",").filter(Boolean) as ArticleTier[] | undefined;
+  const sources   = searchParams.get("sources")?.split(",").filter(Boolean) as SourceType[] | undefined;
+  const limit     = Number(searchParams.get("limit")  ?? 50);
+  const offset    = Number(searchParams.get("offset") ?? 0);
+  const stats     = searchParams.get("stats") === "true";
 
+  // Try Supabase first
   try {
-    const supabase = createServiceClient();
+    const supabase = createClient();
 
     if (stats) {
-      const { data, error } = await supabase
-        .from("articles")
-        .select("source_type, tier, published_at")
-        .order("published_at", { ascending: false })
-        .limit(500);
+      const { count: total } = await supabase.from("articles").select("*", { count: "exact", head: true });
+      const { count: breakingCount } = await supabase.from("articles").select("*", { count: "exact", head: true }).eq("is_breaking", true);
+      const { count: verifiedCount } = await supabase.from("articles").select("*", { count: "exact", head: true }).eq("verified", true);
 
-      if (!error && data) {
-        const bySource: Record<string, number> = {};
-        let breakingCount = 0;
-        let lastHourCount = 0;
-        const cutoff = new Date(Date.now() - 3600_000).toISOString();
-
-        for (const a of data) {
-          const src = a.source_type as SourceType;
-          bySource[src] = (bySource[src] ?? 0) + 1;
-          if (a.tier === "breaking") breakingCount++;
-          if (a.published_at >= cutoff) lastHourCount++;
-        }
-        return NextResponse.json({
-          total: data.length,
-          breaking: breakingCount,
-          lastHour: lastHourCount,
-          bySource,
-        });
-      }
-      return NextResponse.json(countArticles());
+      return NextResponse.json({
+        total: total ?? 0,
+        breaking: breakingCount ?? 0,
+        major: 0,
+        standard: 0,
+        minor: 0,
+        verified: verifiedCount ?? 0,
+        sources: {},
+      });
     }
 
     let q = supabase
@@ -54,9 +44,9 @@ export async function GET(req: Request) {
       .range(offset, offset + limit - 1);
 
     if (breaking) q = q.eq("is_breaking", true);
-    if (search)   q = q.ilike("title", `%${search}%`);
     if (tiers?.length)   q = q.in("tier", tiers);
     if (sources?.length) q = q.in("source_type", sources);
+    if (search)   q = q.ilike("title", `%${search}%`);
     if (since)    q = q.gte("published_at", since);
 
     const { data, error } = await q;
@@ -74,11 +64,31 @@ export async function GET(req: Request) {
   return NextResponse.json(articles);
 }
 
-// POST /api/articles — manually post a breaking news article
+// POST /api/articles — manually post a breaking news article (Requires admin authorization)
 export async function POST(req: Request) {
   try {
+    const authHeader = req.headers.get("authorization") ?? "";
+    const adminKeyHeader = req.headers.get("x-admin-key") ?? "";
+    const expectedSecret = process.env.MANUAL_POST_SECRET || process.env.NEXT_PUBLIC_ADMIN_KEY || "warroom_admin_secret";
+
+    const isAuthorized =
+      authHeader === `Bearer ${expectedSecret}` ||
+      adminKeyHeader === expectedSecret;
+
+    if (expectedSecret && !isAuthorized) {
+      return NextResponse.json(
+        { error: "Unauthorized: Missing or invalid admin key (pass 'x-admin-key' or Authorization Bearer header)" },
+        { status: 401 }
+      );
+    }
+
     const body = await req.json();
-    const { title, summary, url, tier = "breaking" } = body as Partial<Article & { tier: ArticleTier }>;
+    const { title, summary, url, tier = "breaking" } = body as {
+      title?: string;
+      summary?: string;
+      url?: string;
+      tier?: ArticleTier;
+    };
 
     if (!title?.trim()) {
       return NextResponse.json({ error: "title is required" }, { status: 400 });
@@ -101,7 +111,11 @@ export async function POST(req: Request) {
       is_breaking:  tier === "breaking",
       is_manual:    true,
       score:        999,
-      metadata:     {},
+      metadata:     {
+        network_latency_ms: 0,
+        processing_latency_ms: 12,
+      },
+      verified:     true,
     };
 
     // Save to Supabase

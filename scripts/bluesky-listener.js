@@ -4,7 +4,7 @@
  * ---------------------------------------------------------------------------
  * Standalone Bluesky Jetstream firehose listener for War-Room Wire.
  * Filters crisis keywords, logs structured output, forwards to API.
- * Auto-reconnects within 5s on dropped connections without crashing.
+ * Authenticates with BLUESKY_INGEST_SECRET and auto-reconnects within 5s.
  * ---------------------------------------------------------------------------
  */
 
@@ -49,8 +49,9 @@ const CRISIS_KEYWORDS = [
   "blackout", "lockdown", "pandemic",
 ];
 
-const API_BASE_URL  = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-const URL_REGEX     = /https:\/\/[^\s<>"')\]]+/;
+const API_BASE_URL    = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+const INGEST_SECRET   = process.env.BLUESKY_INGEST_SECRET || process.env.NOSTR_INGEST_SECRET || "dev_secret_bluesky";
+const URL_REGEX       = /https:\/\/[^\s<>"')\]]+/;
 
 console.log("==========================================================");
 console.log("  War-Room Wire — Bluesky Jetstream Listener");
@@ -114,8 +115,11 @@ function connect() {
 
         const res = await fetch(`${API_BASE_URL}/api/ingest/bluesky`, {
           method:  "POST",
-          headers: { "Content-Type": "application/json" },
-          body:    JSON.stringify(payload),
+          headers: {
+            "Content-Type":  "application/json",
+            "Authorization": `Bearer ${INGEST_SECRET}`,
+          },
+          body: JSON.stringify(payload),
         });
 
         if (res.ok) {

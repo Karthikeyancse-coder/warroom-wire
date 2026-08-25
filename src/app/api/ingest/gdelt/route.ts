@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/service";
 import { upsertArticle } from "@/lib/store";
+import { normalizeUrl, verifyArticle } from "@/lib/verify-article";
+import { generateContentHash, generateUrlHash, isKnownDuplicate, markAsSeen } from "@/lib/dedupe";
 
 export const dynamic = "force-dynamic";
 
@@ -9,11 +11,11 @@ const GDELT_URL =
 
 let lastFetchedAt = 0;
 const MIN_INTERVAL_MS = 30_000;
+const MAX_GDELT_ARTICLES = 10; // Cap to newest 10 articles per cycle
 
 function parseGdeltDate(seendate: unknown, fallbackIso: string): string {
   if (!seendate) return fallbackIso;
   const str = String(seendate).trim();
-  // Parse GDELT standard format: YYYYMMDDTHHMMSSZ or YYYYMMDDHHMMSS
   const match = str.match(/^(\d{4})(\d{2})(\d{2})T?(\d{2})(\d{2})(\d{2})Z?$/);
   if (match) {
     const [, y, m, d, h, min, s] = match;
@@ -26,8 +28,8 @@ function parseGdeltDate(seendate: unknown, fallbackIso: string): string {
 }
 
 export async function POST(): Promise<NextResponse> {
-  const now = Date.now();
-  if (now - lastFetchedAt < MIN_INTERVAL_MS) {
+  const startTime = Date.now();
+  if (startTime - lastFetchedAt < MIN_INTERVAL_MS) {
     return NextResponse.json({
       source: "gdelt",
       status: "ok",
@@ -36,9 +38,9 @@ export async function POST(): Promise<NextResponse> {
       articles: [],
     });
   }
-  lastFetchedAt = now;
+  lastFetchedAt = startTime;
 
-  const fetchTimeIso = new Date(now).toISOString();
+  const fetchTimeIso = new Date(startTime).toISOString();
   const supabase = createServiceClient();
 
   try {
@@ -81,25 +83,64 @@ export async function POST(): Promise<NextResponse> {
     }
 
     const rawArticles: unknown[] = (json?.articles as unknown[]) ?? [];
-    let inserted = 0;
-    let skipped = 0;
+    const cappedArticles = (rawArticles as Record<string, unknown>[]).slice(0, MAX_GDELT_ARTICLES);
 
-    for (const art of rawArticles as Record<string, unknown>[]) {
-      const externalId = String(art.url ?? art.title ?? "");
-      if (!externalId) {
-        skipped++;
-        continue;
-      }
+    // ── Parallel per-article verification & deduplication across batch ────────
+    const processingPromises = cappedArticles.map(async (art) => {
+      const rawUrl = art.url ? String(art.url).trim() : null;
+      const rawTitle = String(art.title ?? "Untitled").trim();
+      const externalId = String(rawUrl ?? rawTitle ?? "");
+      if (!externalId) return { ok: false };
 
       const realPublishedAt = parseGdeltDate(art.seendate, fetchTimeIso);
+      let finalTitle = rawTitle.slice(0, 255);
+      let finalSummary = art.seendescription ? String(art.seendescription).slice(0, 600) : null;
+      let finalUrl = rawUrl;
+      let imageUrl = art.socialimage ? String(art.socialimage).slice(0, 600) : null;
+      let isVerified = false;
+
+      if (rawUrl) {
+        const normalizedUrl = normalizeUrl(rawUrl);
+        const urlHash = generateUrlHash(normalizedUrl);
+        const initialContentHash = generateContentHash(finalTitle, finalSummary ?? "");
+
+        if (isKnownDuplicate(urlHash, initialContentHash)) {
+          return { ok: false, duplicate: true };
+        }
+
+        try {
+          const verified = await verifyArticle(normalizedUrl);
+          if (verified) {
+            finalTitle = verified.title;
+            finalSummary = verified.cleanText.slice(0, 600);
+            finalUrl = verified.canonicalUrl;
+            imageUrl = verified.imageUrl ?? imageUrl;
+            isVerified = true;
+
+            const contentHash = generateContentHash(finalTitle, verified.cleanText);
+            if (isKnownDuplicate(urlHash, contentHash)) {
+              return { ok: false, duplicate: true };
+            }
+            markAsSeen(urlHash, contentHash);
+          } else {
+            markAsSeen(urlHash, initialContentHash);
+          }
+        } catch {
+          markAsSeen(urlHash, initialContentHash);
+        }
+      }
+
+      const pubTimeMs = new Date(realPublishedAt).getTime();
+      const networkLatencyMs = Math.max(0, startTime - (isNaN(pubTimeMs) ? startTime : pubTimeMs));
+      const processingLatencyMs = Date.now() - startTime;
 
       const record = {
         source_type: "gdelt" as const,
         external_id: `gdelt_${externalId}`,
-        title: String(art.title ?? "Untitled").slice(0, 255),
-        summary: art.seendescription ? String(art.seendescription) : null,
-        url: art.url ? String(art.url) : null,
-        image_url: art.socialimage ? String(art.socialimage).slice(0, 600) : null,
+        title: finalTitle,
+        summary: finalSummary,
+        url: finalUrl,
+        image_url: imageUrl,
         author: art.domain ? String(art.domain) : null,
         published_at: realPublishedAt,
         ingested_at: fetchTimeIso,
@@ -108,17 +149,32 @@ export async function POST(): Promise<NextResponse> {
         is_breaking: false,
         is_manual: false,
         score: art.socialimage ? 2 : 1,
-        metadata: { domain: art.domain, lang: art.language },
+        metadata: {
+          domain: art.domain,
+          lang: art.language,
+          network_latency_ms: networkLatencyMs,
+          processing_latency_ms: processingLatencyMs,
+        },
+        verified: isVerified,
       };
 
       const { inserted: memOk } = upsertArticle(record);
-      if (memOk) inserted++;
 
       try {
         await supabase
           .from("articles")
           .upsert(record, { onConflict: "external_id", ignoreDuplicates: true });
       } catch {}
+
+      return { ok: memOk };
+    });
+
+    const settled = await Promise.allSettled(processingPromises);
+    let totalInserted = 0;
+    for (const r of settled) {
+      if (r.status === "fulfilled" && r.value.ok) {
+        totalInserted++;
+      }
     }
 
     try {
@@ -131,15 +187,15 @@ export async function POST(): Promise<NextResponse> {
     return NextResponse.json({
       source: "gdelt",
       status: "ok",
-      inserted,
-      skipped,
-      articles: rawArticles.slice(0, 20),
+      inserted: totalInserted,
+      skipped: cappedArticles.length - totalInserted,
+      articles: cappedArticles.slice(0, 10),
+      batch_time_ms: Date.now() - startTime,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("[ingest/gdelt] Handled upstream timeout/error:", msg);
 
-    // Update status gracefully
     try {
       await supabase
         .from("sources")
@@ -147,7 +203,6 @@ export async function POST(): Promise<NextResponse> {
         .eq("name", "gdelt");
     } catch {}
 
-    // Fallback: return HTTP 200 with status: "ok" and warning to avoid UI 'Unavailable'
     return NextResponse.json({
       source: "gdelt",
       status: "ok",

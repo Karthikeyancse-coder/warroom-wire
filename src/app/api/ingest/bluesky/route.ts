@@ -11,6 +11,13 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request) {
   const arrivalTime = Date.now();
   try {
+    const authHeader = req.headers.get("authorization") ?? "";
+    const expectedSecret = process.env.BLUESKY_INGEST_SECRET || process.env.NOSTR_INGEST_SECRET || "dev_secret_bluesky";
+
+    if (expectedSecret && authHeader !== `Bearer ${expectedSecret}`) {
+      return NextResponse.json({ error: "Unauthorized: Invalid Bluesky ingest token" }, { status: 401 });
+    }
+
     const body = await req.json();
     const { external_id, title, summary, url, author, published_at, metadata } = body;
 
@@ -125,5 +132,5 @@ export async function POST(req: Request) {
 }
 
 export async function GET() {
-  return NextResponse.json({ message: "Bluesky ingest endpoint ready." });
+  return NextResponse.json({ message: "Bluesky ingest endpoint ready. Use POST with Bearer token." });
 }

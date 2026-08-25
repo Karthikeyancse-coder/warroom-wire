@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { parseStringPromise } from "xml2js";
 import { createServiceClient } from "@/lib/supabase/service";
 import { upsertArticle } from "@/lib/store";
+import { extractUrlFromText, normalizeUrl, verifyArticle } from "@/lib/verify-article";
+import { generateContentHash, generateUrlHash, isKnownDuplicate, markAsSeen } from "@/lib/dedupe";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +19,7 @@ const RSS_FEEDS = [
 
 let lastFetchedAt = 0;
 const MIN_INTERVAL_MS = 30_000;
+const MAX_ARTICLES_PER_FEED = 8; // Cap to newest 8 articles per feed per cycle
 
 function extractPubDate(it: Record<string, unknown>, feedFetchedAt: string): string {
   const rawCandidate =
@@ -49,8 +52,8 @@ function extractPubDate(it: Record<string, unknown>, feedFetchedAt: string): str
 }
 
 export async function POST(): Promise<NextResponse> {
-  const now = Date.now();
-  if (now - lastFetchedAt < MIN_INTERVAL_MS) {
+  const startTime = Date.now();
+  if (startTime - lastFetchedAt < MIN_INTERVAL_MS) {
     return NextResponse.json({
       source: "rss",
       status: "ok",
@@ -60,13 +63,13 @@ export async function POST(): Promise<NextResponse> {
       failed_sources: [],
     });
   }
-  lastFetchedAt = now;
+  lastFetchedAt = startTime;
 
-  const fetchTimeIso = new Date(now).toISOString();
+  const fetchTimeIso = new Date(startTime).toISOString();
   const supabase = createServiceClient();
 
-  // ── Parallel fetch across all RSS feeds with 5s timeout & browser UA ─────────
-  const fetchPromises = RSS_FEEDS.map(async (feed) => {
+  // ── 1. Parallel fetch across all RSS feeds with 5s timeout & browser UA ─────────
+  const feedFetchPromises = RSS_FEEDS.map(async (feed) => {
     const res = await fetch(feed.url, {
       headers: {
         "User-Agent":
@@ -83,14 +86,18 @@ export async function POST(): Promise<NextResponse> {
     return { feed, text };
   });
 
-  const settled = await Promise.allSettled(fetchPromises);
+  const feedSettled = await Promise.allSettled(feedFetchPromises);
 
   let totalInserted = 0;
   let successCount = 0;
   const failedSources: { name: string; reason: string }[] = [];
+  const articlesToProcess: {
+    feed: typeof RSS_FEEDS[number];
+    item: Record<string, unknown>;
+  }[] = [];
 
-  for (let i = 0; i < settled.length; i++) {
-    const result = settled[i];
+  for (let i = 0; i < feedSettled.length; i++) {
+    const result = feedSettled[i];
     const feedConfig = RSS_FEEDS[i];
 
     if (result.status === "rejected") {
@@ -107,61 +114,116 @@ export async function POST(): Promise<NextResponse> {
       const rawItems: unknown = parsed?.rss?.channel?.item ?? parsed?.feed?.entry ?? [];
       const items = Array.isArray(rawItems) ? rawItems : [rawItems];
 
-      let feedInserted = 0;
-      for (const item of items) {
-        if (!item || typeof item !== "object") continue;
-        const it = item as Record<string, unknown>;
-        const title = String((it.title as { _?: string })?._ ?? it.title ?? "").trim();
-        const link = String(it.link ?? (it.link as unknown as { href?: string })?.href ?? "").trim();
-        const desc = String(
-          (it.description as { _?: string })?._ ??
-            it.description ??
-            (it.summary as { _?: string })?._ ??
-            it.summary ??
-            ""
-        ).slice(0, 600);
-
-        if (!title || !link) continue;
-
-        const realPublishedAt = extractPubDate(it, fetchTimeIso);
-
-        const record = {
-          source_type: "rss" as const,
-          external_id: `rss_${link}`,
-          title: title.slice(0, 255),
-          summary: desc || null,
-          url: link,
-          image_url: null as string | null,
-          author: feed.name,
-          published_at: realPublishedAt,
-          ingested_at: fetchTimeIso,
-          tier: feed.tier as "major" | "standard",
-          tags: [feed.name.toLowerCase().replace(/\s+/g, "-")],
-          is_breaking: false,
-          is_manual: false,
-          score: 1,
-          metadata: { feed: feed.name },
-        };
-
-        const { inserted: ok } = upsertArticle(record);
-        if (ok) {
-          feedInserted++;
-          totalInserted++;
+      // Cap to newest MAX_ARTICLES_PER_FEED
+      const capped = items.slice(0, MAX_ARTICLES_PER_FEED);
+      for (const item of capped) {
+        if (item && typeof item === "object") {
+          articlesToProcess.push({ feed, item: item as Record<string, unknown> });
         }
-
-        try {
-          await supabase
-            .from("articles")
-            .upsert(record, { onConflict: "external_id", ignoreDuplicates: true });
-        } catch {}
       }
-
       successCount++;
     } catch (err) {
       failedSources.push({
         name: feedConfig.name,
         reason: err instanceof Error ? err.message : "XML parse error",
       });
+    }
+  }
+
+  // ── 2. Parallel per-article verification & deduplication across whole batch ──
+  const articleProcessingPromises = articlesToProcess.map(async ({ feed, item }) => {
+    const title = String((item.title as { _?: string })?._ ?? item.title ?? "").trim();
+    const rawLink = String(item.link ?? (item.link as unknown as { href?: string })?.href ?? "").trim();
+    const desc = String(
+      (item.description as { _?: string })?._ ??
+        item.description ??
+        (item.summary as { _?: string })?._ ??
+        item.summary ??
+        ""
+    ).slice(0, 600);
+
+    if (!title || !rawLink) return { ok: false };
+
+    const realPublishedAt = extractPubDate(item, fetchTimeIso);
+    let finalTitle = title.slice(0, 255);
+    let finalSummary = desc || null;
+    let finalUrl = rawLink;
+    let imageUrl: string | null = null;
+    let isVerified = false;
+
+    // Fast deduplication pre-check
+    const normalizedUrl = normalizeUrl(rawLink);
+    const urlHash = generateUrlHash(normalizedUrl);
+    const initialContentHash = generateContentHash(finalTitle, finalSummary ?? "");
+
+    if (isKnownDuplicate(urlHash, initialContentHash)) {
+      return { ok: false, duplicate: true };
+    }
+
+    // Optional rapid link verification with fallback
+    try {
+      const verified = await verifyArticle(normalizedUrl);
+      if (verified) {
+        finalTitle = verified.title;
+        finalSummary = verified.cleanText.slice(0, 600);
+        finalUrl = verified.canonicalUrl;
+        imageUrl = verified.imageUrl;
+        isVerified = true;
+
+        const contentHash = generateContentHash(finalTitle, verified.cleanText);
+        if (isKnownDuplicate(urlHash, contentHash)) {
+          return { ok: false, duplicate: true };
+        }
+        markAsSeen(urlHash, contentHash);
+      } else {
+        markAsSeen(urlHash, initialContentHash);
+      }
+    } catch {
+      markAsSeen(urlHash, initialContentHash);
+    }
+
+    const pubTimeMs = new Date(realPublishedAt).getTime();
+    const networkLatencyMs = Math.max(0, startTime - (isNaN(pubTimeMs) ? startTime : pubTimeMs));
+    const processingLatencyMs = Date.now() - startTime;
+
+    const record = {
+      source_type: "rss" as const,
+      external_id: `rss_${rawLink}`,
+      title: finalTitle,
+      summary: finalSummary,
+      url: finalUrl,
+      image_url: imageUrl,
+      author: feed.name,
+      published_at: realPublishedAt,
+      ingested_at: fetchTimeIso,
+      tier: feed.tier as "major" | "standard",
+      tags: [feed.name.toLowerCase().replace(/\s+/g, "-")],
+      is_breaking: false,
+      is_manual: false,
+      score: 1,
+      metadata: {
+        feed: feed.name,
+        network_latency_ms: networkLatencyMs,
+        processing_latency_ms: processingLatencyMs,
+      },
+      verified: isVerified,
+    };
+
+    const { inserted: memOk } = upsertArticle(record);
+
+    try {
+      await supabase
+        .from("articles")
+        .upsert(record, { onConflict: "external_id", ignoreDuplicates: true });
+    } catch {}
+
+    return { ok: memOk };
+  });
+
+  const articleResults = await Promise.allSettled(articleProcessingPromises);
+  for (const r of articleResults) {
+    if (r.status === "fulfilled" && r.value.ok) {
+      totalInserted++;
     }
   }
 
@@ -174,7 +236,6 @@ export async function POST(): Promise<NextResponse> {
       .eq("name", "rss");
   } catch {}
 
-  // Ok as long as at least one feed succeeds
   const overallStatus = successCount > 0 ? "ok" : "degraded";
 
   return NextResponse.json({
@@ -182,10 +243,11 @@ export async function POST(): Promise<NextResponse> {
     status: overallStatus,
     count: totalInserted,
     inserted: totalInserted,
-    skipped: 0,
+    skipped: articlesToProcess.length - totalInserted,
     successful_feeds: successCount,
     total_feeds: RSS_FEEDS.length,
     failed_sources: failedSources,
+    batch_time_ms: Date.now() - startTime,
   });
 }
 

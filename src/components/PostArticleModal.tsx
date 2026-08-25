@@ -1,18 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { X, Send, AlertTriangle } from "lucide-react";
+import { X, Send, AlertTriangle, Key } from "lucide-react";
 import type { ArticleTier } from "@/types";
 
 interface Props { onClose: () => void; }
 
 export default function PostArticleModal({ onClose }: Props) {
-  const [title,   setTitle]   = useState("");
-  const [summary, setSummary] = useState("");
-  const [url,     setUrl]     = useState("");
-  const [tier,    setTier]    = useState<ArticleTier>("breaking");
-  const [loading, setLoading] = useState(false);
-  const [error,   setError]   = useState<string | null>(null);
+  const [title,    setTitle]    = useState("");
+  const [summary,  setSummary]  = useState("");
+  const [url,      setUrl]      = useState("");
+  const [tier,     setTier]     = useState<ArticleTier>("breaking");
+  const [adminKey, setAdminKey] = useState(() => process.env.NEXT_PUBLIC_ADMIN_KEY || "warroom_admin_secret");
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -22,8 +23,11 @@ export default function PostArticleModal({ onClose }: Props) {
     try {
       const res = await fetch("/api/articles", {
         method:  "POST",
-        headers: { "Content-Type": "application/json" },
-        body:    JSON.stringify({ title, summary, url, tier }),
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-key":   adminKey.trim(),
+        },
+        body: JSON.stringify({ title, summary, url, tier }),
       });
       if (!res.ok) {
         const j = await res.json();
@@ -122,6 +126,21 @@ export default function PostArticleModal({ onClose }: Props) {
                 <option value="minor">📡 Minor</option>
               </select>
             </div>
+          </div>
+
+          {/* Admin Passcode field */}
+          <div className="flex flex-col gap-1.5 pt-1">
+            <label htmlFor="admin-key" className="text-xs font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wider flex items-center gap-1">
+              <Key className="w-3 h-3 text-amber-500" /> Admin Passcode
+            </label>
+            <input
+              id="admin-key"
+              type="password"
+              value={adminKey}
+              onChange={(e) => setAdminKey(e.target.value)}
+              placeholder="Admin secret key"
+              className="px-3.5 py-2 rounded-xl bg-surface-muted border border-surface-border text-gray-900 dark:text-white text-xs font-mono placeholder:text-gray-400 focus:outline-none focus:border-brand-500 transition-all"
+            />
           </div>
 
           <div className="flex gap-3 pt-2">
